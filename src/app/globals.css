@@ -1,26 +1,53 @@
 @import "tailwindcss";
 
+/* Design system tokens from DESIGN.md */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --bg: #09090b;
+  --surface-1: #121215;
+  --surface-2: #18181b;
+  --surface-3: #27272a;
+  --border: #27272a;
+  --border-active: #3f3f46;
+  --border-focus: #52525b;
+  --text-primary: #f4f4f5;
+  --text-secondary: #a1a1aa;
+  --text-muted: #71717a;
 }
+
+/* react-grid-layout grid styles */
+@import "react-grid-layout/css/styles.css";
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --color-background: var(--bg);
+  --color-foreground: var(--text-primary);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+/* Scrollbar */
+::-webkit-scrollbar { display: none; }
+html { scrollbar-width: none; }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg);
+  color: var(--text-primary);
+  font-family: var(--font-geist-sans);
 }
+
+/* Custom color utilities using bracket notation */
+.bg-surface-1 { background-color: var(--surface-1); }
+.bg-surface-2 { background-color: var(--surface-2); }
+.bg-surface-3 { background-color: var(--surface-3); }
+.border-custom { border-color: var(--border); }
+.border-active { border-color: var(--border-active); }
+.border-focus { border-color: var(--border-focus); }
+.text-primary { color: var(--text-primary); }
+.text-secondary { color: var(--text-secondary); }
+.text-muted { color: var(--text-muted); }
+
+/* Accent colors from default Tailwind palette (match DESIGN.md) */
+.text-indigo-600 { color: #6366f1; }
+.text-sky-500 { color: #0ea5e9; }
+.text-emerald-500 { color: #10b981; }
+.text-amber-500 { color: #f59e0b; }
+.text-rose-500 { color: #ef4444; }
