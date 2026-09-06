@@ -1,8 +1,23 @@
 "use client";
 
 import { useState } from "react";
+import { AIAssistantWidget } from "@/components/widgets/AIAssistantWidget";
+import { TaskboardWidget } from "@/components/widgets/TaskboardWidget";
+import { ResourceHubWidget } from "@/components/widgets/ResourceHubWidget";
+import { DevToolsWidget } from "@/components/widgets/DevToolsWidget";
+import { ChatWidget } from "@/components/widgets/ChatWidget";
+import { FocusStationWidget } from "@/components/widgets/FocusStationWidget";
 
 type WidgetType = "ai" | "tasks" | "resources" | "dev-tools" | "chat" | "focus";
+
+const widgetMap: Record<WidgetType, React.ComponentType> = {
+  ai: AIAssistantWidget,
+  tasks: TaskboardWidget,
+  resources: ResourceHubWidget,
+  "dev-tools": DevToolsWidget,
+  chat: ChatWidget,
+  focus: FocusStationWidget,
+};
 
 const widgetDefaults: Record<WidgetType, { i: string; w: number; h: number; minW?: number; minH?: number; maxW?: number; maxH?: number; }> = {
   ai: { i: "ai", w: 6, h: 8, minW: 4, minH: 4, maxW: 12, maxH: 20 },
@@ -37,20 +52,24 @@ export function WorkspaceCanvas() {
   };
 
   return (
-    <section
-      className="relative min-h-[calc(100vh_._32rem_._12rem)] bg-surface-1 border-t border-custom"
-    >
-      <div className="absolute inset-0 grid grid-cols-[repeat__{COLUMNS}_1fr] gap-4" style={{ gridTemplateColumns: `repeat(${COLUMNS}, 1fr)` }}>
+    <section className="relative min-h-[calc(100vh_._32rem_._12rem)] bg-surface-1 border-t border-custom">
+      <div
+        className="absolute inset-0 grid gap-4"
+        style={{ gridTemplateColumns: `repeat(${COLUMNS}, 1fr)` }}
+      >
         {layout.map((item) => {
           const config = widgetDefaults[item.i as WidgetType];
           if (!config) return null;
+
+          const WidgetComponent = widgetMap[item.i as WidgetType];
           const xPercent = item.x * BASE_WIDTH;
           const wPercent = item.w * BASE_WIDTH;
+
           return (
             <div
               key={item.i}
               data-widget-type={item.i}
-              className="rounded-custom border border-custom p-4 bg-surface-2 shadow-sm"
+              className="rounded-custom border border-custom p-3 bg-surface-2 shadow-sm"
               style={{
                 gridColumn: `span ${item.w}`,
                 gridRow: `span ${item.h}`,
@@ -58,22 +77,7 @@ export function WorkspaceCanvas() {
                 left: `${item.x * BASE_WIDTH}%`,
               }}
             >
-              <div className="h-6 w-6 text-secondary mb-3 flex items-center justify-center">
-                <svg
-                  className="h-6 w-6 text-secondary"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                >
-                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                  <circle cx="8" cy="8" r="2" />
-                  <path d="M21 15a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2" />
-                  <path d="M17 3h1a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1M9 3v12" />
-                </svg>
-              </div>
-              <h3 className="text-sm font-medium text-primary mb-2">{item.i}</h3>
-              <p className="text-xs text-muted h-8 overflow-hidden whitespace-nowrap">Widget {item.i}</p>
+              <WidgetComponent />
             </div>
           );
         })}
