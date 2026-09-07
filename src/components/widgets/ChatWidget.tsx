@@ -1,192 +1,242 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { MessageCircle, Headphones, Clock, Users, TrendingUp, Check } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { 
+  MessageSquare, 
+  Send, 
+  Smile, 
+  Code, 
+  Headphones, 
+  Copy, 
+  Check, 
+  Radio, 
+  Users, 
+  Terminal,
+  Sparkles
+} from "lucide-react";
+import { chatStore, ChatMessage } from "@/lib/chatStore";
+import { useSession } from "next-auth/react";
 
-interface ChatMessage {
-  id: string;
-  content: string;
-  userId: string;
-  userName: string;
-  time: string;
-  mentions?: string[];
-}
+const EMOJI_LIST = ["👍", "🚀", "❤️", "💡", "🐛", "🔥", "🎉", "👀"];
 
-const sampleMessages: ChatMessage[] = [
-  {
-    id: "1",
-    content: "Hey team, just deployed the new auth system! Working great so far. 🚀",
-    userId: "user1",
-    userName: "Alice",
-    time: "10:23",
-    mentions: [],
-  },
-  {
-    id: "2",
-    content: "Awesome! Any chance we can add rate limiting to the login endpoint?",
-    userId: "user2",
-    userName: "Bob",
-    time: "10:24",
-    mentions: ["user1"],
-  },
-  {
-    id: "3",
-    content: "Good idea. I'll open a ticket for that.",
-    userId: "user3",
-    userName: "Charlie",
-    time: "10:25",
-    mentions: [],
-  },
-  {
-    id: "4",
-    content: "Who's up for a quick voice huddle to discuss the API design?",
-    userId: "user4",
-    userName: "David",
-    time: "10:27",
-    mentions: [],
-  },
-];
-
-const sampleUsers = [
-  { id: "user1", name: "Alice", status: "active" as const },
-  { id: "user2", name: "Bob", status: "away" as const },
-  { id: "user3", name: "Charlie", status: "do_not_disturb" as const },
-  { id: "user4", name: "David", status: "active" as const },
-  { id: "user5", name: "Eve", status: "active" as const },
-  { id: "user6", name: "Frank", status: "offline" as const },
-];
-
-const statusColors: Record<ChatMessage["userId"], string> = {
-  user1: "bg-emerald-500",
-  user2: "bg-amber-500",
-  user3: "bg-rose-500",
-  user4: "bg-sky-500",
-  user5: "bg-indigo-500",
-  user6: "bg-muted",
-};
-
-export function ChatWidget() {
-  const [messages, setMessages] = useState<ChatMessage[]>(sampleMessages);
+export function ChatWidget({ onOpenVoiceModal }: { onOpenVoiceModal?: () => void }) {
+  const { data: session } = useSession();
+  const [messages, setMessages] = useState<ChatMessage[]>(chatStore.getMessages());
   const [input, setInput] = useState("");
-  const [activeUsers, setActiveUsers] = useState<number>(4);
+  const [isCodeSnippetMode, setIsCodeSnippetMode] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      setActiveUsers(Math.floor(Math.random() * 6) + 2);
-    }, 5000);
-    return () => clearInterval(interval);
+    return chatStore.subscribe(() => {
+      setMessages(chatStore.getMessages());
+    });
   }, []);
 
-  const handleSend = () => {
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  const currentUserName = session?.user?.name || "You (Developer)";
+  const currentUserId = session?.user?.id || session?.user?.email || "user-dev";
+  const currentUserAvatar = session?.user?.image || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80";
+
+  const handleSendMessage = () => {
     if (!input.trim()) return;
 
-    const newMessage: ChatMessage = {
-      id: Date.now().toString(),
+    chatStore.sendMessage({
       content: input.trim(),
-      userId: "user1", // Simulate current user
-      userName: "Alice",
-      time: "now",
-      mentions: [],
-    };
+      userId: currentUserId,
+      userName: currentUserName,
+      userAvatar: currentUserAvatar,
+      isCode: isCodeSnippetMode || input.includes("```"),
+      codeLanguage: isCodeSnippetMode ? "typescript" : undefined,
+    });
 
-    setMessages((prev) => [...prev, newMessage]);
     setInput("");
+    setIsCodeSnippetMode(false);
+    setShowEmojiPicker(false);
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      handleSend();
+      handleSendMessage();
     }
   };
 
-  const emojis = ["👍", "👎", "❤️", "😀", "😂", "🤔", "🚀", "💡", "🐛", "✅"];
+  const handleCopyCode = (text: string, id: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  const handleAddReaction = (msgId: string, emoji: string) => {
+    chatStore.addReaction(msgId, emoji);
+  };
 
   return (
-    <div className="h-full flex flex-col bg-surface-1 rounded-lg border border-custom overflow-hidden">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-custom">
+    <div className="h-full flex flex-col bg-[#121215] border border-[#27272a] rounded-xl overflow-hidden shadow-sm">
+      {/* Widget Header */}
+      <div className="flex items-center justify-between px-4 py-2.5 bg-[#18181b] border-b border-[#27272a]">
         <div className="flex items-center gap-2">
-          <MessageCircle className="h-4 w-4 text-emerald-500" />
-          <span className="text-xs font-medium text-primary">Team Chat</span>
+          <MessageSquare className="w-4 h-4 text-emerald-400" />
+          <span className="text-xs font-semibold text-[#f4f4f5]">Team Live Chat</span>
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">
+            WebSocket Sync
+          </span>
         </div>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted">🟢 {activeUsers} online</span>
-        </div>
-      </div>
 
-      <div className="flex-1 overflow-y-auto p-3 space-y-2">
-        {messages.map((msg) => (
-          <div
-            key={msg.id}
-            className={`flex ${msg.userId === "user1" ? "justify-end" : "justify-start"} mb-2`}
-          >
-            <div
-              className={`max-w-[80%] rounded-lg px-3 py-2 ${
-                msg.userId === "user1"
-                  ? "bg-emerald-500 text-white"
-                  : "bg-surface-2 border border-custom"
-              }`}
+        <div className="flex items-center gap-2">
+          {onOpenVoiceModal && (
+            <button
+              onClick={onOpenVoiceModal}
+              className="flex items-center gap-1.5 px-2 py-1 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 rounded text-[11px] font-medium transition-colors"
             >
-              <div className="flex items-center gap-1 mb-1">
-                <div className="h-2 w-2 rounded-full ${statusColors[msg.userId as keyof typeof statusColors]}" />
-                <span className="font-medium text-xs">{msg.userName}</span>
-                <span className="text-xs text-muted">
-                  {msg.time}
-                </span>
-              </div>
-              <div className="text-sm text-primary whitespace-pre-wrap break-words">
-                {msg.content}
-              </div>
-            </div>
-          </div>
-        ))}
-        {false && (
-          <div className="flex justify-start">
-            <div className="bg-surface-2 border border-custom rounded-lg px-3 py-2">
-              <div className="flex items-center gap-2 text-xs text-secondary">
-                Alice is typing...
-              </div>
-            </div>
-          </div>
-        )}
+              <Headphones className="w-3 h-3" />
+              <span>Voice Room</span>
+            </button>
+          )}
+        </div>
       </div>
 
-      <div className="p-3 border-t border-custom">
-        <div className="flex gap-2">
+      {/* Messages Feed */}
+      <div className="flex-1 overflow-y-auto p-3.5 space-y-3.5 text-xs">
+        {messages.map((msg) => {
+          const isCurrentUser = msg.userId === currentUserId;
+          return (
+            <div key={msg.id} className="flex items-start gap-2.5 group">
+              <img
+                src={msg.userAvatar || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80"}
+                alt={msg.userName}
+                className="w-7 h-7 rounded-full object-cover border border-[#27272a] mt-0.5 flex-shrink-0"
+              />
+
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="font-semibold text-[#f4f4f5]">{msg.userName}</span>
+                  <span className="text-[10px] text-[#71717a] font-mono">{msg.time}</span>
+                </div>
+
+                {/* Message Body (Markdown / Code / Plain) */}
+                {msg.isCode ? (
+                  <div className="relative bg-[#09090b] border border-[#27272a] rounded-lg p-2.5 font-mono text-[11px] text-emerald-300 overflow-x-auto my-1">
+                    <button
+                      onClick={() => handleCopyCode(msg.content, msg.id)}
+                      className="absolute top-2 right-2 p-1 bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] rounded text-[#a1a1aa] hover:text-[#f4f4f5] transition-colors"
+                      title="Copy code"
+                    >
+                      {copiedId === msg.id ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                    </button>
+                    <pre className="pr-6 whitespace-pre-wrap">{msg.content.replace(/```[a-z]*\n?/g, "")}</pre>
+                  </div>
+                ) : (
+                  <p className="text-[#d4d4d8] leading-relaxed whitespace-pre-wrap break-words">
+                    {msg.content}
+                  </p>
+                )}
+
+                {/* Reactions */}
+                <div className="flex items-center gap-1.5 mt-1.5">
+                  {Object.entries(msg.reactions).map(([emoji, count]) => (
+                    <button
+                      key={emoji}
+                      onClick={() => handleAddReaction(msg.id, emoji)}
+                      className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#18181b] hover:bg-[#27272a] border border-[#27272a] text-[11px] text-[#a1a1aa] transition-colors"
+                    >
+                      <span>{emoji}</span>
+                      <span className="text-[10px] font-mono">{count}</span>
+                    </button>
+                  ))}
+
+                  {/* Add reaction mini trigger */}
+                  <button
+                    onClick={() => handleAddReaction(msg.id, "🚀")}
+                    className="opacity-0 group-hover:opacity-100 p-0.5 text-[#71717a] hover:text-[#f4f4f5] rounded transition-opacity"
+                    title="React with 🚀"
+                  >
+                    +🚀
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* Emoji Picker Popover */}
+      {showEmojiPicker && (
+        <div className="flex items-center gap-1 px-3 py-1.5 bg-[#18181b] border-t border-[#27272a]">
+          {EMOJI_LIST.map((emoji) => (
+            <button
+              key={emoji}
+              onClick={() => {
+                setInput((prev) => prev + " " + emoji);
+                setShowEmojiPicker(false);
+              }}
+              className="p-1 hover:bg-[#27272a] rounded text-base transition-colors"
+            >
+              {emoji}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Input Composer */}
+      <div className="p-2.5 bg-[#18181b] border-t border-[#27272a]">
+        <div className="flex flex-col gap-1.5 bg-[#121215] border border-[#27272a] rounded-lg p-2 focus-within:border-indigo-500/50 transition-all">
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Type a message... (Enter to send, Shift+Enter for newline)"
-            className="flex-1 bg-surface-2 border border-custom rounded px-2 py-1.5 text-xs text-primary placeholder-muted resize-none outline-none focus:border-indigo-500"
-            rows={2}
+            placeholder={
+              isCodeSnippetMode
+                ? "Paste code snippet here... (Press Enter to share)"
+                : "Type message or code... (Enter to send, Shift+Enter for newline)"
+            }
+            rows={isCodeSnippetMode ? 3 : 2}
+            className="w-full bg-transparent text-xs text-[#f4f4f5] placeholder-[#71717a] outline-none resize-none"
           />
-          <button
-            onClick={handleSend}
-            disabled={!input.trim()}
-            className="px-3 py-2 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors"
-          >
-            <MessageCircle className="h-4 w-4 text-white" />
-          </button>
-        </div>
-      </div>
 
-      {showEmojiPicker && (
-        <div className="absolute bottom-14 left-3 right-3 bg-surface-2 border border-custom rounded-lg p-2 z-20">
-          <div className="flex flex-wrap gap-1">
-            {emojis.map((emoji) => (
+          <div className="flex items-center justify-between pt-1 border-t border-[#27272a]/50">
+            <div className="flex items-center gap-1.5">
               <button
-                key={emoji}
-                onClick={() => setInput((prev) => prev + emoji)}
-                className="flex items-center justify-center h-8 w-8 bg-surface-3 rounded hover:bg-surface-2 transition-colors text-lg"
+                type="button"
+                onClick={() => setIsCodeSnippetMode((prev) => !prev)}
+                className={`p-1.5 rounded transition-colors text-xs flex items-center gap-1 ${
+                  isCodeSnippetMode
+                    ? "bg-indigo-600/20 text-indigo-400 border border-indigo-500/30"
+                    : "text-[#71717a] hover:text-[#f4f4f5] hover:bg-[#18181b]"
+                }`}
+                title="Format as Code Snippet"
               >
-                {emoji}
+                <Code className="w-3.5 h-3.5" />
+                <span className="text-[10px]">Snippet</span>
               </button>
-            ))}
+
+              <button
+                type="button"
+                onClick={() => setShowEmojiPicker((prev) => !prev)}
+                className="p-1.5 rounded text-[#71717a] hover:text-[#f4f4f5] hover:bg-[#18181b] transition-colors"
+                title="Emoji"
+              >
+                <Smile className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <button
+              onClick={handleSendMessage}
+              disabled={!input.trim()}
+              className="flex items-center gap-1.5 px-3 py-1 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium text-xs rounded transition-all"
+            >
+              <span>Send</span>
+              <Send className="w-3 h-3" />
+            </button>
           </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }
