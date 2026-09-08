@@ -45,6 +45,9 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       return session;
     },
   },
+  // Allow Auth.js to trust the request host, so logins work on localhost,
+  // LAN IPs and preview URLs in development without host mismatches.
+  trustHost: true,
   pages: {
     signIn: "/",
   },

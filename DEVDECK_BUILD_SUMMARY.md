@@ -20,7 +20,11 @@ multi-model AI assistants, real-time chat/voice, and focus media into a drag-and
 | **1** | Foundation, Auth & Dynamic Grid Layout | ✅ Complete |
 | **2** | Core Developer Utilities & Link Health Hub | ✅ Complete |
 | **3** | Task Engine & GitHub Webhooks Integration | ✅ Complete |
-| **4** | Real-Time Chat, Voice Huddles & Multi-Model AI | ⚠️ In Progress |
+| **4** | Real-Time Chat, Voice Huddles & Multi-Model AI | ✅ Complete |
+
+> **Round 1 — functional fixes:** Chat now persists to `localStorage`, syncs live across browser tabs, auto-replies from teammates, and is wired to `/api/chat` with a real “Live Sync / Offline” status badge. The Voice Huddle captures a **real microphone** via `getUserMedia` with a live Web Audio level meter and working mute/screen-share. The Focus Station now plays **real YouTube audio** through the IFrame API (hidden player, verified track IDs, working play/pause/skip/volume). Dev Tools tabs were refactored into proper components (fixes a React hook-order crash when switching tabs).
+
+> **Round 2 — ready-for-use polish:** The **Sidebar now works** — every nav item scrolls to, reveals and highlights its widget; hidden widgets are auto-shown on focus; “Add Widget” opens a toggle popover; Settings opens the new settings screen; collapsed mode shows clickable icons with ⌘B to collapse. Widgets are **truly movable** (react-grid-layout with drag handles + resize, no auto-compaction so they stay where dropped) and the whole workspace (positions + visible widgets) **persists across reloads** via synchronous localStorage hydration. The **⌘K command palette is connected** and its results navigate to widgets/actions. A full **Settings screen** ships with Account (Google session, email, sign-out), Workspace (reset grid / clear chat), API Keys vault (local, masked) and About tabs — reachable from the profile dropdown and sidebar. Auth (Google + quick demo sign-in) is verified end-to-end with the profile dropdown wired to each settings tab.
 
 ---
 
@@ -83,40 +87,30 @@ multi-model AI assistants, real-time chat/voice, and focus media into a drag-and
 ## 🏗️ Shell Components
 
 ### TopBar
-- DevDeck logo (clickable)
-- Workspace switcher dropdown (Personal Dev, Team Alpha, Org Beta)
-- Command palette trigger (⌘K)
-- Voice huddle indicator ("2 in Voice" with pulsing dot)
-- Presence badge ("Coding - Deep Work")
-- Notification bell (3 notifications)
-- User profile dropdown
+- DevDeck logo, workspace switcher dropdown, presence badge, notification bell
+- Command palette trigger (⌘K) — wired to the real palette
+- Voice huddle indicator with live member count ("2 in Voice")
+- User profile dropdown → Account Settings / API Keys Vault / Workspace Preferences all open the matching Settings tab, plus Sign Out
 
 ### Sidebar (Collapsible)
-- Width: 160px (expanded) / 48px (collapsed)
-- Navigation shortcuts: Dashboard, Tasks, AI Assistant, Resources, Dev Tools, Chat, Focus, Settings
-- Quick action: "+ Add Widget" button
-- Collapsible arrow/chevron toggle
+- Width: 168px (expanded) / 48px (collapsed, icon-only but still clickable), toggle via ⌘B
+- Navigation shortcuts focus/reveal widgets on the grid (scroll + flash) and scroll Dashboard to top
+- "+ Add Widget" popover to show/hide widgets on the canvas
+- Settings button opens the Settings screen
+
+### Command Palette (⌘K)
+- Controlled from the TopBar button and ⌘K shortcut
+- Searches widgets + actions (Settings, Voice Huddle, Show All Widgets, Dashboard)
+- Enter selects the first result; Esc closes
 
 ### StatusBar
-- System status: "🟢 Coding - Deep Work"
-- Widget count: "12 widgets"
-- Task count: "42 tasks"
-- Focus timer: "2h 15m focus"
-- WebSocket status: "📡 WS active"
-- RAM usage: "💾 87% RAM"
+- System status, widget/task counters, focus time, WS + RAM metrics
 
 ### WorkspaceCanvas
-- 12-column CSS grid layout
-- Default 6-widget layout:
-  - AI Assistant (6x8)
-  - Taskboard (4x10)
-  - Resources (4x6)
-  - Dev Tools (3x5)
-  - Chat (5x6)
-  - Focus Station (5x5)
-- Drag-and-drop handles on widget headers
-- Resizable bottom-right corner handles
-- Smooth transitions and animations
+- react-grid-layout v2 (legacy API), 12 columns, drag by any widget header, resize from the SE corner
+- No auto-compaction: widgets stay exactly where dropped
+- Widget set + positions persist across reloads (localStorage)
+- Focus requests scroll to and flash the target widget
 
 ---
 
@@ -283,13 +277,15 @@ The application features a complete dark-mode dashboard with:
 
 ---
 
-## � roadmap Next Steps
+> **Round 3 — real-time & shell polish:** A **Socket.io server** (`server.mjs`) now runs alongside Next (same port via a custom server; `npm run dev`/`npm start` both use it). Chat **syncs across browsers and machines** — messages, reactions and presence relay through the hub, with an in-memory server log merged on connect; the widget badge shows “Socket Live · N online”. Voice huddle join/mute/leave and speaking state also broadcast so every client sees the same roster. The **app shell is viewport-locked** (no page scrolling; sidebar is fixed with internal scroll, only the canvas scrolls) and **widget resizing** via the corner handle is confirmed working. Google auth was made honest: the modal detects whether real OAuth keys are configured and shows a clear demo-mode banner; “Continue with Google” no longer dead-ends — it signs into the demo account and explains why.
 
-1. **Vercel AI SDK Integration** - Connect AI Assistant to real AI models with streaming
-2. **Spotify Web Playback SDK** - Embedded player with visualizer for Focus Station
-3. **Real-time WebSocket chat** - Socket.io integration for live messaging
-4. **User authentication** - NextAuth.js with Google OAuth 2.0
-5. **PostgreSQL database** - Prisma ORM for persisting tasks, layouts, links
-6. **Redis + BullMQ** - Background queue for link health pinging
+> **Round 4 — durable chat history:** The chat message log now **survives server restarts**. `server.mjs` loads and writes through a persistence store (`persistence.mjs`) that uses a local JSON file (`data/chat-log.json`, git-ignored) by default and **automatically switches to Neon Postgres** when `DATABASE_URL` is present (Neon project `floral-hall-91766599`, branch `production`, linked via the Neon CLI). On first switch the file history is migrated into the `devdeck_chat` table; messages and reaction counts persist, and history is served to new clients on connect. Verified end-to-end: a message sent before a hard server restart was served from Postgres afterwards.
+
+## 🗺️ Future Roadmap
+
+1. **Vercel AI SDK integration** — connect the AI Assistant to real model APIs (Gemini / GPT / Claude) with streaming
+2. **Persist tasks, links & layouts** — Neon-backed CRUD for the Taskboard, Resource Hub and grid so they survive restarts too
+3. **Redis + BullMQ** — background queue for link health pinging
+4. **Spotify Web Playback SDK** — user-account music in the Focus Station
 
 ---

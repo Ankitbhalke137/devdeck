@@ -15,14 +15,16 @@ import {
   ShieldAlert
 } from "lucide-react";
 import { chatStore, VoiceParticipant } from "@/lib/chatStore";
+import { SettingsTab } from "@/components/settings/SettingsModal";
 
 export interface TopBarProps {
   onOpenCommandPalette: () => void;
   onOpenAuthModal: () => void;
   onOpenVoiceModal: () => void;
+  onOpenSettings: (tab: SettingsTab) => void;
 }
 
-export function TopBar({ onOpenCommandPalette, onOpenAuthModal, onOpenVoiceModal }: TopBarProps) {
+export function TopBar({ onOpenCommandPalette, onOpenAuthModal, onOpenVoiceModal, onOpenSettings }: TopBarProps) {
   const { data: session, status } = useSession();
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
   const [voiceMembers, setVoiceMembers] = useState<VoiceParticipant[]>(chatStore.getVoiceMembers());
@@ -152,17 +154,32 @@ export function TopBar({ onOpenCommandPalette, onOpenAuthModal, onOpenVoiceModal
                   <p className="text-[11px] text-[#71717a] truncate font-mono">{user?.email}</p>
                 </div>
 
-                <button className="w-full flex items-center gap-2.5 px-3 py-2 text-[#d4d4d8] hover:bg-[#18181b] rounded-lg transition-colors text-left">
+                <button
+                  onClick={() => {
+                    if (isAuthenticated) {
+                      onOpenSettings("account");
+                    } else {
+                      onOpenAuthModal();
+                    }
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 text-[#d4d4d8] hover:bg-[#18181b] rounded-lg transition-colors text-left"
+                >
                   <User className="w-3.5 h-3.5 text-[#a1a1aa]" />
                   <span>Account Settings</span>
                 </button>
 
-                <button className="w-full flex items-center gap-2.5 px-3 py-2 text-[#d4d4d8] hover:bg-[#18181b] rounded-lg transition-colors text-left">
+                <button
+                  onClick={() => onOpenSettings("keys")}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 text-[#d4d4d8] hover:bg-[#18181b] rounded-lg transition-colors text-left"
+                >
                   <Key className="w-3.5 h-3.5 text-[#a1a1aa]" />
                   <span>API Keys Vault</span>
                 </button>
 
-                <button className="w-full flex items-center gap-2.5 px-3 py-2 text-[#d4d4d8] hover:bg-[#18181b] rounded-lg transition-colors text-left">
+                <button
+                  onClick={() => onOpenSettings("workspace")}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 text-[#d4d4d8] hover:bg-[#18181b] rounded-lg transition-colors text-left"
+                >
                   <Settings className="w-3.5 h-3.5 text-[#a1a1aa]" />
                   <span>Workspace Preferences</span>
                 </button>

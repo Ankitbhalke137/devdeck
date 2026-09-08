@@ -88,7 +88,7 @@ export function ResourceHubWidget() {
 
   return (
     <div className="h-full flex flex-col bg-surface-1 rounded-lg border border-custom overflow-hidden">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-custom">
+      <div className="widget-header flex items-center justify-between px-3 py-2 border-b border-custom">
         <div className="flex items-center gap-2">
           <ExternalLink className="h-4 w-4 text-indigo-500" />
           <span className="text-xs font-medium text-primary">Resource Hub</span>

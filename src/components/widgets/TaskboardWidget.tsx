@@ -6,6 +6,8 @@ import {
   PointerSensor,
   useSensor,
   useSensors,
+  type DragStartEvent,
+  type DragEndEvent,
 } from "@dnd-kit/core";
 import { arrayMove } from "@dnd-kit/sortable";
 import { useState, useEffect } from "react";
@@ -97,14 +99,11 @@ const sensors = useSensors(
   })
 );
 
-  const handleDragStart = (event: { active: { id: any } }) => {
+  const handleDragStart = (event: DragStartEvent) => {
     setActiveId(event.active.id as string);
   };
 
-  const handleDragEnd = (event: {
-    active: { id: any };
-    over: { id: any } | null;
-  }) => {
+  const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
 
     if (!over) {
@@ -188,7 +187,7 @@ const sensors = useSensors(
 
   return (
     <div className="h-full flex flex-col bg-surface-1 rounded-lg border border-custom overflow-hidden">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-custom">
+      <div className="widget-header flex items-center justify-between px-3 py-2 border-b border-custom">
         <div className="flex items-center gap-2">
           <List className="h-4 w-4 text-sky-500" />
           <span className="text-xs font-medium text-primary">Task Engine</span>
