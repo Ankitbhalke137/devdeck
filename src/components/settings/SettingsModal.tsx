@@ -14,8 +14,10 @@ import {
   Check,
   Save,
   ShieldCheck,
+  Download,
+  Upload,
 } from "lucide-react";
-import { workspaceStore } from "@/lib/workspaceStore";
+import { workspaceStore, ALL_WIDGET_TYPES } from "@/lib/workspaceStore";
 import { chatStore } from "@/lib/chatStore";
 
 export type SettingsTab = "account" | "workspace" | "keys" | "about";
@@ -29,6 +31,7 @@ interface SettingsModalProps {
 
 const KEYS_STORAGE = "devdeck.apiKeys.v1";
 const KEY_PROVIDERS = [
+  { id: "groq", label: "Groq (console.groq.com)", placeholder: "gsk_…", hint: "Free API keys at console.groq.com/keys — ultra-fast free tier LPU inference" },
   { id: "gemini", label: "Google Gemini", placeholder: "AIzaSy…", hint: "Used by the AI Assistant widget" },
   { id: "openai", label: "OpenAI", placeholder: "sk-…", hint: "Used by the AI Assistant widget" },
   { id: "anthropic", label: "Anthropic Claude", placeholder: "sk-ant-…", hint: "Used by the AI Assistant widget" },
@@ -59,6 +62,9 @@ export function SettingsModal({ tab, onClose, onOpenAuth, onTabChange }: Setting
   const [savedFlash, setSavedFlash] = useState<string | null>(null);
   const [clearedFlash, setClearedFlash] = useState(false);
   const [resetFlash, setResetFlash] = useState(false);
+  const [importFlash, setImportFlash] = useState<"success" | "error" | null>(null);
+  const exportWorkspace = workspaceStore((s) => s.exportWorkspace);
+  const importWorkspace = workspaceStore((s) => s.importWorkspace);
 
   const isAuthenticated = status === "authenticated" && !!session?.user;
   const user = session?.user;
@@ -221,9 +227,57 @@ export function SettingsModal({ tab, onClose, onOpenAuth, onTabChange }: Setting
                 <div className="bg-[#18181b] border border-[#27272a] rounded-xl p-4">
                   <div className="flex items-start justify-between gap-4">
                     <div>
-                      <div className="text-sm font-medium text-[#f4f4f5]">Clear chat history</div>
+                      <div className="text-sm font-medium text-[#f4f4f5]">Export / Import workspace</div>
                       <p className="text-[11px] text-[#71717a] mt-0.5">
-                        Delete all messages from the Team Chat widget in this browser.
+                        Download a JSON backup or restore from a file.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <button
+                        onClick={exportWorkspace}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-[#27272a] hover:bg-[#3f3f46] text-[#f4f4f5] rounded-lg transition-colors"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        Export
+                      </button>
+                      <label className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors cursor-pointer">
+                        <Upload className="w-3.5 h-3.5" />
+                        Import
+                        <input
+                          type="file"
+                          accept=".json"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (!file) return;
+                            const reader = new FileReader();
+                            reader.onload = () => {
+                              const result = importWorkspace(reader.result as string);
+                              setImportFlash(result ? "success" : "error");
+                              setTimeout(() => setImportFlash(null), 2000);
+                            };
+                            reader.readAsText(file);
+                            e.target.value = "";
+                          }}
+                        />
+                      </label>
+                      {importFlash === "success" && (
+                        <span className="text-[10px] text-emerald-400 font-mono">Imported!</span>
+                      )}
+                      {importFlash === "error" && (
+                        <span className="text-[10px] text-rose-400 font-mono">Invalid file</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-[#18181b] border border-[#27272a] rounded-xl p-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <div className="text-sm font-medium text-[#f4f4f5]">Widgets on canvas</div>
+                      <p className="text-[11px] text-[#71717a] mt-0.5">
+                        {activeWidgets.length} of {ALL_WIDGET_TYPES.length} active — manage visibility from the sidebar&apos;s
+                        &quot;Add Widget&quot; menu.
                       </p>
                     </div>
                     <button

@@ -2,17 +2,23 @@
 
 import { create } from "zustand";
 
-export type WidgetType = "ai" | "tasks" | "resources" | "dev-tools" | "chat" | "focus";
+export type WidgetType = "ai" | "tasks" | "resources" | "chat" | "focus" | "music" | "notes" | "stats" | "habits" | "calendar" | "sharedNotes" | "telemetry";
 
-export const ALL_WIDGET_TYPES: WidgetType[] = ["ai", "tasks", "resources", "dev-tools", "chat", "focus"];
+export const ALL_WIDGET_TYPES: WidgetType[] = ["ai", "tasks", "telemetry", "resources", "chat", "music", "notes", "stats", "habits", "calendar", "sharedNotes", "focus"];
 
 export const WIDGET_META: Record<WidgetType, { label: string; description: string }> = {
   ai: { label: "AI Assistant", description: "Multi-model AI chat" },
   tasks: { label: "Task Engine", description: "Kanban task board" },
+  telemetry: { label: "Live Telemetry", description: "System & CI/CD velocity" },
   resources: { label: "Resource Hub", description: "Link health monitor" },
-  "dev-tools": { label: "Dev Tools", description: "JSON, JWT, Regex, Base64" },
   chat: { label: "Team Chat", description: "Live team messaging" },
-  focus: { label: "Focus Station", description: "Pomodoro + music" },
+  focus: { label: "Focus Timer", description: "Pomodoro timer" },
+  music: { label: "Music Player", description: "YouTube music player" },
+  notes: { label: "Quick Notes", description: "Markdown scratchpad" },
+  stats: { label: "Focus Stats", description: "Pomodoro analytics" },
+  habits: { label: "Habit Tracker", description: "Daily habit tracking" },
+  calendar: { label: "Calendar", description: "Event calendar" },
+  sharedNotes: { label: "Shared Notes", description: "Real-time collaborative notes" },
 };
 
 export interface WidgetLayoutItem {
@@ -29,10 +35,16 @@ export interface WidgetLayoutItem {
 export const DEFAULT_LAYOUT: WidgetLayoutItem[] = [
   { i: "ai", x: 0, y: 0, w: 7, h: 10, minW: 4, minH: 6 },
   { i: "tasks", x: 7, y: 0, w: 5, h: 10, minW: 4, minH: 6 },
-  { i: "resources", x: 0, y: 10, w: 4, h: 9, minW: 3, minH: 5 },
-  { i: "dev-tools", x: 4, y: 10, w: 4, h: 9, minW: 3, minH: 5 },
-  { i: "chat", x: 8, y: 10, w: 4, h: 9, minW: 3, minH: 5 },
-  { i: "focus", x: 0, y: 19, w: 12, h: 6, minW: 6, minH: 4 },
+  { i: "telemetry", x: 0, y: 10, w: 12, h: 6, minW: 6, minH: 4 },
+  { i: "resources", x: 0, y: 16, w: 4, h: 8, minW: 3, minH: 5 },
+  { i: "chat", x: 4, y: 16, w: 4, h: 8, minW: 3, minH: 5 },
+  { i: "music", x: 8, y: 16, w: 4, h: 8, minW: 3, minH: 5 },
+  { i: "notes", x: 0, y: 24, w: 4, h: 7, minW: 3, minH: 4 },
+  { i: "stats", x: 4, y: 24, w: 4, h: 7, minW: 3, minH: 4 },
+  { i: "habits", x: 8, y: 24, w: 4, h: 7, minW: 3, minH: 4 },
+  { i: "calendar", x: 0, y: 31, w: 6, h: 8, minW: 4, minH: 5 },
+  { i: "sharedNotes", x: 6, y: 31, w: 6, h: 8, minW: 4, minH: 5 },
+  { i: "focus", x: 0, y: 39, w: 12, h: 6, minW: 6, minH: 4 },
 ];
 
 export const DEFAULT_ACTIVE: WidgetType[] = [...ALL_WIDGET_TYPES];
@@ -95,6 +107,8 @@ interface WorkspaceState {
   toggleWidget: (type: WidgetType) => void;
   setLayout: (layout: readonly WidgetLayoutItem[]) => void;
   resetWorkspace: () => void;
+  exportWorkspace: () => void;
+  importWorkspace: (json: string) => boolean;
 }
 
 export const workspaceStore = create<WorkspaceState>((set, get) => ({
@@ -146,5 +160,35 @@ export const workspaceStore = create<WorkspaceState>((set, get) => ({
   resetWorkspace: () => {
     writePersisted({ active: DEFAULT_ACTIVE, layout: DEFAULT_LAYOUT });
     set({ active: DEFAULT_ACTIVE, layout: DEFAULT_LAYOUT });
+  },
+
+  exportWorkspace: () => {
+    const state = get();
+    const data = {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      active: state.active,
+      layout: state.layout,
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `devdeck-workspace-${new Date().toISOString().split("T")[0]}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  },
+
+  importWorkspace: (json: string) => {
+    try {
+      const data = JSON.parse(json);
+      if (!Array.isArray(data.active) || !Array.isArray(data.layout)) return false;
+      const validActive = data.active.filter((t: string) => ALL_WIDGET_TYPES.includes(t as WidgetType));
+      writePersisted({ active: validActive, layout: data.layout });
+      set({ active: validActive, layout: data.layout });
+      return true;
+    } catch {
+      return false;
+    }
   },
 }));

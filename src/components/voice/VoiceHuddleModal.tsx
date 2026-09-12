@@ -5,10 +5,44 @@ import { Mic, MicOff, PhoneOff, Users, Radio, Volume2, ShieldCheck, Share2, Moni
 import { chatStore, VoiceParticipant } from "@/lib/chatStore";
 import { useSession } from "next-auth/react";
 import { getChatSocket } from "@/lib/chatSocket";
+import { initialsAvatar } from "@/lib/avatar";
 
 interface VoiceHuddleModalProps {
   isOpen: boolean;
   onClose: () => void;
+}
+
+interface RemoteStream {
+  id: string;
+  stream: MediaStream;
+}
+
+// Free public STUN servers — enough for local/LAN huddles and most internet
+// cases without any API keys or accounts.
+const ICE_SERVERS: RTCIceServer[] = [
+  { urls: "stun:stun.l.google.com:19302" },
+  { urls: "stun:stun1.l.google.com:19302" },
+];
+
+/** Hidden <audio> that plays one remote peer's incoming WebRTC stream. */
+function RemoteAudio({ stream }: { stream: MediaStream }) {
+  const ref = useRef<HTMLAudioElement | null>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.srcObject = stream;
+    el.play().catch(() => {
+      // Autoplay blocked — retry on any user interaction.
+      const unlock = () => {
+        el.play().catch(() => {});
+        document.removeEventListener("click", unlock);
+        document.removeEventListener("keydown", unlock);
+      };
+      document.addEventListener("click", unlock);
+      document.addEventListener("keydown", unlock);
+    });
+  }, [stream]);
+  return <audio ref={ref} autoPlay playsInline className="hidden" />;
 }
 
 export function VoiceHuddleModal({ isOpen, onClose }: VoiceHuddleModalProps) {
@@ -20,6 +54,7 @@ export function VoiceHuddleModal({ isOpen, onClose }: VoiceHuddleModalProps) {
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [micLevel, setMicLevel] = useState(0); // 0..1 real RMS from the mic
   const [waveHeights, setWaveHeights] = useState<number[]>([12, 24, 18, 30, 22, 14, 28, 16]);
+  const [remoteStreams, setRemoteStreams] = useState<RemoteStream[]>([]);
 
   const micStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
@@ -27,10 +62,22 @@ export function VoiceHuddleModal({ isOpen, onClose }: VoiceHuddleModalProps) {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const rafRef = useRef<number>(0);
   const lastSpeakingRef = useRef(false);
+  const peerConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
+  const pendingCandidatesRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
 
   const currentUserId = session?.user?.id || session?.user?.email || "current-user";
   const currentUserName = session?.user?.name || "You (Developer)";
-  const currentUserAvatar = session?.user?.image || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80";
+  const currentUserAvatar = session?.user?.image || initialsAvatar(currentUserName);
+
+  // Keep the latest identity in refs so socket handlers (registered once on
+  // mount) always use the current session user.
+  const userIdRef = useRef(currentUserId);
+  const userNameRef = useRef(currentUserName);
+  const myConnRef = useRef<string>("");
+  useEffect(() => {
+    userIdRef.current = currentUserId;
+    userNameRef.current = currentUserName;
+  }, [currentUserId, currentUserName]);
 
   useEffect(() => {
     return chatStore.subscribe(() => {
@@ -38,29 +85,180 @@ export function VoiceHuddleModal({ isOpen, onClose }: VoiceHuddleModalProps) {
     });
   }, []);
 
-  // Voice roster sync: the server is the source of truth across machines.
+  /* ---------------- WebRTC signaling (peer-to-peer audio mesh) ---------------- */
+
+  const sendSignal = useCallback((to: string, signal: unknown) => {
+    const socket = getChatSocket();
+    if (!socket?.connected) return;
+    socket.emit("voice:signal", { to, from: userIdRef.current, signal });
+  }, []);
+
+  const closePeer = useCallback((peerId: string) => {
+    peerConnectionsRef.current.get(peerId)?.close();
+    peerConnectionsRef.current.delete(peerId);
+    pendingCandidatesRef.current.delete(peerId);
+    setRemoteStreams((prev) => prev.filter((r) => r.id !== peerId));
+  }, []);
+
+  const createPeer = useCallback(
+    (peerId: string) => {
+      const existing = peerConnectionsRef.current.get(peerId);
+      if (existing) return existing;
+
+      const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+      peerConnectionsRef.current.set(peerId, pc);
+
+      // Send our mic into the connection.
+      const local = micStreamRef.current;
+      if (local) {
+        local.getTracks().forEach((track) => pc.addTrack(track, local));
+      }
+
+      pc.onicecandidate = (e) => {
+        if (e.candidate) {
+          sendSignal(peerId, { type: "ice", candidate: e.candidate.toJSON() });
+        }
+      };
+
+      pc.ontrack = (e) => {
+        const stream = e.streams[0];
+        if (!stream) return;
+        setRemoteStreams((prev) =>
+          prev.some((r) => r.id === peerId) ? prev : [...prev, { id: peerId, stream }]
+        );
+      };
+
+      pc.onconnectionstatechange = () => {
+        if (pc.connectionState === "failed" || pc.connectionState === "closed") {
+          closePeer(peerId);
+        }
+      };
+
+      return pc;
+    },
+    [sendSignal, closePeer]
+  );
+
+  const makeOffer = useCallback(
+    async (peerId: string) => {
+      const pc = peerConnectionsRef.current.get(peerId);
+      if (!pc) return;
+      try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        sendSignal(peerId, { type: "offer", sdp: pc.localDescription });
+      } catch (err) {
+        console.error("Voice offer failed:", err);
+      }
+    },
+    [sendSignal]
+  );
+
+  const onSignal = useCallback(
+    async (from: string, signal: unknown) => {
+      if (!signal || typeof signal !== "object" || from === userIdRef.current) return;
+      const msg = signal as { type?: string; sdp?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit };
+
+      if (msg.type === "offer" && msg.sdp) {
+        const pc = createPeer(from);
+        try {
+          await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+          const pending = pendingCandidatesRef.current.get(from) || [];
+          pendingCandidatesRef.current.delete(from);
+          for (const c of pending) await pc.addIceCandidate(new RTCIceCandidate(c));
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          sendSignal(from, { type: "answer", sdp: pc.localDescription });
+        } catch (err) {
+          console.error("Voice answer failed:", err);
+        }
+      } else if (msg.type === "answer" && msg.sdp) {
+        const pc = peerConnectionsRef.current.get(from);
+        if (!pc) return;
+        try {
+          await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+          const pending = pendingCandidatesRef.current.get(from) || [];
+          pendingCandidatesRef.current.delete(from);
+          for (const c of pending) await pc.addIceCandidate(new RTCIceCandidate(c));
+        } catch (err) {
+          console.error("Voice remote description failed:", err);
+        }
+      } else if (msg.type === "ice" && msg.candidate) {
+        const pc = peerConnectionsRef.current.get(from);
+        if (!pc) return;
+        if (pc.remoteDescription) {
+          await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)).catch(() => {});
+        } else {
+          const pending = pendingCandidatesRef.current.get(from) || [];
+          pending.push(msg.candidate);
+          pendingCandidatesRef.current.set(from, pending);
+        }
+      }
+    },
+    [createPeer, sendSignal]
+  );
+
+  const reconcilePeers = useCallback(
+    (roster: VoiceParticipant[]) => {
+      // Only manage peers once we're actually in the huddle with a local stream.
+      if (!micStreamRef.current) return;
+      const me = userIdRef.current;
+      const peerIds = new Set(roster.map((p) => p.id).filter((id) => id !== me));
+
+      // Drop peers that left.
+      for (const id of [...peerConnectionsRef.current.keys()]) {
+        if (!peerIds.has(id)) closePeer(id);
+      }
+
+      // Connect to new peers. Deterministic rule guarantees exactly one offer
+      // per pair (no glare): compare unique connection ids when available (so
+      // two tabs of the same account still connect), falling back to user ids.
+      const myConn = myConnRef.current;
+      for (const id of peerIds) {
+        if (peerConnectionsRef.current.has(id)) continue;
+        createPeer(id);
+        const peerConn = roster.find((p) => p.id === id)?.conn || "";
+        const shouldOffer = myConn && peerConn ? myConn < peerConn : me < id;
+        if (shouldOffer) makeOffer(id);
+      }
+    },
+    [createPeer, makeOffer, closePeer]
+  );
+
+  // Roster sync + WebRTC signaling via the shared Socket.io connection.
   useEffect(() => {
     const socket = getChatSocket();
     if (!socket) return;
+    if (socket.id) myConnRef.current = socket.id;
+    socket.on("connect", () => {
+      myConnRef.current = socket.id || "";
+    });
     const handleVoiceState = (roster: VoiceParticipant[]) => {
       chatStore.setVoiceRoster(roster);
+      reconcilePeers(roster);
+    };
+    const handleVoiceSignal = (payload: { from: string; signal: unknown }) => {
+      onSignal(payload.from, payload.signal);
     };
     socket.on("voice:state", handleVoiceState);
-    if (socket.connected) {
+    socket.on("voice:signal", handleVoiceSignal);
+    if (!socket.connected) {
       socket.connect();
     }
     return () => {
+      socket.off("connect");
       socket.off("voice:state", handleVoiceState);
+      socket.off("voice:signal", handleVoiceSignal);
     };
-  }, []);
+  }, [reconcilePeers, onSignal]);
 
   const emitVoiceState = () => {
     const socket = getChatSocket();
     if (!socket?.connected) return;
-    const member = participants.find((p) => p.id === currentUserId);
+    const member = participants.find((p) => p.id === userIdRef.current);
     socket.emit("voice:update", {
-      id: currentUserId,
-      name: currentUserName,
+      id: userIdRef.current,
+      name: userNameRef.current,
       avatar: currentUserAvatar,
       isMuted,
       isSpeaking: !!member?.isSpeaking,
@@ -83,13 +281,15 @@ export function VoiceHuddleModal({ isOpen, onClose }: VoiceHuddleModalProps) {
     return () => clearInterval(interval);
   }, [isOpen, micLevel]);
 
-  // Release hardware when the modal unmounts.
+  // Release hardware + peer connections when the modal unmounts.
   useEffect(() => {
     return () => {
       cancelAnimationFrame(rafRef.current);
       micStreamRef.current?.getTracks().forEach((t) => t.stop());
       screenStreamRef.current?.getTracks().forEach((t) => t.stop());
       audioContextRef.current?.close().catch(() => {});
+      peerConnectionsRef.current.forEach((pc) => pc.close());
+      peerConnectionsRef.current.clear();
     };
   }, []);
 
@@ -113,20 +313,20 @@ export function VoiceHuddleModal({ isOpen, onClose }: VoiceHuddleModalProps) {
       setMicLevel(level);
       // Voice-activity detection: above threshold counts as speaking.
       const speaking = level > 0.14 && !isMuted;
-      chatStore.setSpeaking(currentUserId, speaking);
+      chatStore.setSpeaking(userIdRef.current, speaking);
       if (speaking !== lastSpeakingRef.current) {
         lastSpeakingRef.current = speaking;
         const socket = getChatSocket();
         socket?.connected &&
           socket.emit("voice:update", {
-            id: currentUserId,
+            id: userIdRef.current,
             isSpeaking: speaking,
           });
       }
       rafRef.current = requestAnimationFrame(tick);
     };
     rafRef.current = requestAnimationFrame(tick);
-  }, [currentUserId, isMuted]);
+  }, [isMuted]);
 
   const handleJoin = async () => {
     setIsJoining(true);
@@ -158,15 +358,26 @@ export function VoiceHuddleModal({ isOpen, onClose }: VoiceHuddleModalProps) {
       chatStore.joinVoice({ id: currentUserId, name: currentUserName, avatar: currentUserAvatar, muted: true });
     } finally {
       setIsJoining(false);
+      const payload = {
+        id: currentUserId,
+        name: currentUserName,
+        avatar: currentUserAvatar,
+        isMuted: joinedMuted,
+        role: "Participant",
+      };
       const socket = getChatSocket();
-      socket?.connected &&
-        socket.emit("voice:join", {
-          id: currentUserId,
-          name: currentUserName,
-          avatar: currentUserAvatar,
-          isMuted: isMuted || joinedMuted,
-          role: "Participant",
-        });
+      if (socket?.connected) {
+        socket.emit("voice:join", payload);
+      } else if (socket) {
+        // Socket exists but not connected yet — emit once connected.
+        const onConn = () => {
+          socket.emit("voice:join", payload);
+          socket.off("connect", onConn);
+        };
+        socket.on("connect", onConn);
+      }
+      // Connect to anyone already in the room (server roster echo also does this).
+      reconcilePeers(chatStore.getVoiceMembers());
     }
   };
 
@@ -177,7 +388,7 @@ export function VoiceHuddleModal({ isOpen, onClose }: VoiceHuddleModalProps) {
     micStreamRef.current?.getAudioTracks().forEach((track) => {
       track.enabled = !next;
     });
-    chatStore.toggleMute(currentUserId);
+    chatStore.toggleMute(userIdRef.current);
     emitVoiceState();
   };
 
@@ -212,9 +423,14 @@ export function VoiceHuddleModal({ isOpen, onClose }: VoiceHuddleModalProps) {
     audioContextRef.current = null;
     analyserRef.current = null;
     setIsMuted(false);
-    chatStore.leaveVoice(currentUserId);
+    chatStore.leaveVoice(userIdRef.current);
+    // Close every peer connection so remote audio stops immediately.
+    peerConnectionsRef.current.forEach((pc) => pc.close());
+    peerConnectionsRef.current.clear();
+    pendingCandidatesRef.current.clear();
+    setRemoteStreams([]);
     const socket = getChatSocket();
-    socket?.connected && socket.emit("voice:leave", currentUserId);
+    socket?.connected && socket.emit("voice:leave", userIdRef.current);
     onClose();
   };
 
@@ -230,6 +446,11 @@ export function VoiceHuddleModal({ isOpen, onClose }: VoiceHuddleModalProps) {
         className="relative w-full max-w-lg bg-[#121215] border border-[#27272a] rounded-2xl shadow-2xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Incoming peer audio (WebRTC) — plays only while the huddle is open */}
+        {remoteStreams.map(({ id, stream }) => (
+          <RemoteAudio key={id} stream={stream} />
+        ))}
+
         {/* Top Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-[#27272a] bg-[#18181b]/60">
           <div className="flex items-center gap-2.5">
@@ -240,10 +461,10 @@ export function VoiceHuddleModal({ isOpen, onClose }: VoiceHuddleModalProps) {
               <h3 className="text-sm font-semibold text-[#f4f4f5] flex items-center gap-2">
                 Engineering Voice Huddle
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
-                  Real WebRTC Mic
+                  Real P2P Audio
                 </span>
               </h3>
-              <p className="text-xs text-[#71717a]">Browser microphone · live audio levels</p>
+              <p className="text-xs text-[#71717a]">Browser mic · peer-to-peer WebRTC between members</p>
             </div>
           </div>
 

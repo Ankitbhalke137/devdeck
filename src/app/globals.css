@@ -1,7 +1,8 @@
 @import "tailwindcss";
 
 /* Design system tokens from DESIGN.md */
-:root {
+:root,
+.dark {
   --bg: #09090b;
   --surface-1: #121215;
   --surface-2: #18181b;
@@ -12,6 +13,19 @@
   --text-primary: #f4f4f5;
   --text-secondary: #a1a1aa;
   --text-muted: #71717a;
+}
+
+.light {
+  --bg: #f8f9fa;
+  --surface-1: #ffffff;
+  --surface-2: #f1f3f5;
+  --surface-3: #e9ecef;
+  --border: #dee2e6;
+  --border-active: #ced4da;
+  --border-focus: #adb5bd;
+  --text-primary: #212529;
+  --text-secondary: #495057;
+  --text-muted: #868e96;
 }
 
 /* react-grid-layout grid styles */
@@ -32,6 +46,7 @@ body {
   background: var(--bg);
   color: var(--text-primary);
   font-family: var(--font-geist-sans);
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 /* Custom color utilities using bracket notation */

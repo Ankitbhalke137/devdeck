@@ -16,12 +16,15 @@ import { fileURLToPath } from "node:url";
 
 const DATA_DIR = join(dirname(fileURLToPath(import.meta.url)), "data");
 const LOG_FILE = join(DATA_DIR, "chat-log.json");
+const ROOMS_FILE = join(DATA_DIR, "rooms.json");
 const MESSAGE_LIMIT = 200;
 
 let backend = "file";
 let neonSql = null;
 let writeTimer = null;
 let memoryCache = null; // used only by the file backend
+let roomsWriteTimer = null;
+let roomsCache = null;
 
 function currentTime() {
   return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -78,6 +81,106 @@ async function ensureNeonTable() {
     console.error("[persistence] neon init failed:", err?.message);
     throw err;
   }
+}
+
+/* ------------------------------- rooms backend ------------------------------ */
+// Extra chat/music rooms are persisted file-only (data/rooms.json). The
+// "general" room keeps its legacy single-log path (file + Neon) so nothing
+// that already works regresses.
+
+function readRoomsFile() {
+  try {
+    if (!existsSync(ROOMS_FILE)) return {};
+    const raw = readFileSync(ROOMS_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function scheduleRoomsWrite(data) {
+  roomsCache = data;
+  if (roomsWriteTimer) return;
+  roomsWriteTimer = setTimeout(() => {
+    roomsWriteTimer = null;
+    try {
+      mkdirSync(DATA_DIR, { recursive: true });
+      const tmp = ROOMS_FILE + ".tmp";
+      writeFileSync(tmp, JSON.stringify(roomsCache, null, 2), "utf8");
+      renameSync(tmp, ROOMS_FILE);
+    } catch (err) {
+      console.error("[persistence] could not write rooms file:", err?.message);
+    }
+  }, 120);
+}
+
+/** Load extra rooms (everything except "general", whose log keeps its own path). */
+export function loadRooms() {
+  const raw = readRoomsFile();
+  const out = new Map();
+  for (const [id, r] of Object.entries(raw)) {
+    if (id === "general" || !r || typeof r !== "object") continue;
+    out.set(id, {
+      id,
+      name: String(r.name || id).slice(0, 40),
+      createdBy: r.createdBy || null,
+      createdAt: r.createdAt || Date.now(),
+      messages: Array.isArray(r.messages) ? r.messages.slice(-MESSAGE_LIMIT) : [],
+      music: r.music || null,
+    });
+  }
+  return out;
+}
+
+/** Persist a whole extra room (metadata + messages + music). */
+export function persistRoom(room) {
+  const all = readRoomsFile();
+  all[room.id] = {
+    name: room.name,
+    createdBy: room.createdBy || null,
+    createdAt: room.createdAt || Date.now(),
+    messages: room.messages.slice(-MESSAGE_LIMIT),
+    music: room.music || null,
+  };
+  scheduleRoomsWrite(all);
+}
+
+/** Normalize an incoming message the same way the legacy log does. */
+function normalizeEntry(message) {
+  return {
+    id: message.id,
+    content: message.content,
+    userId: message.userId || "unknown",
+    userName: message.userName || "Guest",
+    userAvatar: message.userAvatar || null,
+    time: message.time || currentTime(),
+    isCode: !!message.isCode,
+    codeLanguage: message.codeLanguage || undefined,
+    reactions: {},
+  };
+}
+
+/** Append a message to a room's log and return the normalized entry. */
+export async function appendRoomMessage(roomId, message) {
+  if (roomId === "general") {
+    // Legacy path: file + Neon, verified end-to-end.
+    return appendMessage(message);
+  }
+  const entry = normalizeEntry(message);
+  const all = readRoomsFile();
+  const room = all[roomId] || { name: roomId, messages: [] };
+  room.messages = [...(room.messages || []), entry].slice(-MESSAGE_LIMIT);
+  all[roomId] = room;
+  scheduleRoomsWrite(all);
+  return entry;
+}
+
+/** Persist a room's shared music state (file backend; general included). */
+export function saveRoomMusic(roomId, music) {
+  const all = readRoomsFile();
+  all[roomId] = { ...(all[roomId] || {}), music: music || null };
+  scheduleRoomsWrite(all);
 }
 
 /* --------------------------------- public --------------------------------- */

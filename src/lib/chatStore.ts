@@ -1,3 +1,5 @@
+import { initialsAvatar } from "./avatar";
+
 export interface ChatMessage {
   id: string;
   content: string;
@@ -8,6 +10,8 @@ export interface ChatMessage {
   isCode?: boolean;
   codeLanguage?: string;
   reactions: Record<string, number>; // emoji -> count
+  replyTo?: string; // id of the message being replied to
+  threadCount?: number; // number of replies in this thread
 }
 
 export interface VoiceParticipant {
@@ -17,122 +21,66 @@ export interface VoiceParticipant {
   isSpeaking: boolean;
   isMuted: boolean;
   role: string;
+  conn?: string; // server socket id — breaks offer/answer ties between same-user tabs
 }
 
-const STORAGE_KEY = "devdeck.chat.messages.v1";
+export interface RoomInfo {
+  id: string;
+  name: string;
+  members: number;
+}
 
-const DEFAULT_MESSAGES: ChatMessage[] = [
-  {
-    id: "msg-1",
-    content: "Hey team, just deployed the new Auth layer with Google OAuth & Live WebSockets! 🚀",
-    userId: "user-system",
-    userName: "Alice (Lead)",
-    userAvatar: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80",
-    time: "10:20 AM",
-    reactions: { "🚀": 3, "❤️": 2 },
-  },
-  {
-    id: "msg-2",
-    content: "```typescript\n// Real-time link health listener\nexport const pingHealth = async (url: string) => {\n  const res = await fetch(`/api/health?url=${url}`);\n  return res.status === 200;\n};\n```",
-    userId: "user-tech",
-    userName: "Alex Developer",
-    userAvatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
-    time: "10:22 AM",
-    isCode: true,
-    codeLanguage: "typescript",
-    reactions: { "💡": 4, "👍": 2 },
-  },
-  {
-    id: "msg-3",
-    content: "Starting audio huddle in the Standup Channel now! Join if you have questions on the schema.",
-    userId: "user-sarah",
-    userName: "Sarah Infrastructure",
-    userAvatar: "https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&auto=format&fit=crop&q=80",
-    time: "10:25 AM",
-    reactions: { "🔥": 2 },
-  },
-];
+export interface PresenceUser {
+  id: string;
+  name: string;
+  avatar?: string | null;
+}
 
-const DEFAULT_VOICE_MEMBERS: VoiceParticipant[] = [
-  {
-    id: "voice-1",
-    name: "Sarah Infrastructure",
-    avatar: "https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&auto=format&fit=crop&q=80",
-    isSpeaking: true,
-    isMuted: false,
-    role: "Host",
-  },
-  {
-    id: "voice-2",
-    name: "Alex Developer",
-    avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
-    isSpeaking: false,
-    isMuted: false,
-    role: "Participant",
-  },
-];
-
-/** Teammates who can auto-reply so the chat feels alive. */
-const TEAMMATES = [
-  {
-    name: "Alice (Lead)",
-    avatar: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80",
-    replies: [
-      "Nice! I'll review it in a sec 👍",
-      "On it — adding to my queue.",
-      "LGTM so far. Can you also update the docs?",
-      "Merged the latest changes, should be live on staging.",
-      "Let's pair on this after standup.",
-      "🔥 Great work everyone!",
-    ],
-  },
-  {
-    name: "Alex Developer",
-    avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
-    replies: [
-      "Yep, works on my machine 😄",
-      "I'll check the logs and report back.",
-      "Pushing a fix now...",
-      "Good catch! Adding a regression test.",
-      "Sounds good to me.",
-    ],
-  },
-  {
-    name: "Sarah Infrastructure",
-    avatar: "https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&auto=format&fit=crop&q=80",
-    replies: [
-      "Deploying to production in 10 min 🚀",
-      "Latency looks fine, monitoring is green.",
-      "The huddle is still open if anyone wants to jump in.",
-      "Scaling the workers — should be done shortly.",
-      "I'll keep an eye on the dashboards.",
-    ],
-  },
-];
+// Per-room storage keys (v2 suffix keeps stale v1 demo conversations out).
+const ROOM_STORAGE_PREFIX = "devdeck.chat.messages.v2.";
+const CURRENT_ROOM_KEY = "devdeck.chat.room.v1";
 
 const LISTENERS = new Set<() => void>();
-let messagesState: ChatMessage[] | null = null;
-let voiceMembersState: VoiceParticipant[] = [...DEFAULT_VOICE_MEMBERS];
+const messagesByRoom: Record<string, ChatMessage[] | null> = {};
+let voiceMembersState: VoiceParticipant[] = [];
 let isUserInVoice = false;
+let presenceCount = 0;
+let presenceUsersState: PresenceUser[] = [];
+let roomsState: RoomInfo[] = [];
+let currentRoomId = "general";
 
-function loadMessages(): ChatMessage[] {
-  if (typeof window === "undefined") return [...DEFAULT_MESSAGES];
+// Restore the last-used room (client only).
+if (typeof window !== "undefined") {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-    }
+    const saved = localStorage.getItem(CURRENT_ROOM_KEY);
+    if (saved) currentRoomId = saved;
   } catch {
-    // corrupted storage — fall through to defaults
+    // ignore unavailable storage
   }
-  return [...DEFAULT_MESSAGES];
 }
 
-function saveMessages(messages: ChatMessage[]) {
+function storageKey(roomId: string) {
+  return ROOM_STORAGE_PREFIX + roomId;
+}
+
+function loadMessages(roomId: string): ChatMessage[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(storageKey(roomId));
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {
+    // corrupted storage — fall through to empty
+  }
+  return [];
+}
+
+function saveMessages(roomId: string, messages: ChatMessage[]) {
   if (typeof window === "undefined") return;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
+    localStorage.setItem(storageKey(roomId), JSON.stringify(messages));
   } catch {
     // storage full or unavailable — chat still works in memory
   }
@@ -141,11 +89,12 @@ function saveMessages(messages: ChatMessage[]) {
 // Sync chat across browser tabs in real time (storage events fire in other tabs).
 if (typeof window !== "undefined") {
   window.addEventListener("storage", (e) => {
-    if (e.key === STORAGE_KEY && e.newValue) {
+    if (e.key && e.key.startsWith(ROOM_STORAGE_PREFIX) && e.newValue) {
+      const roomId = e.key.slice(ROOM_STORAGE_PREFIX.length);
       try {
         const parsed = JSON.parse(e.newValue);
         if (Array.isArray(parsed)) {
-          messagesState = parsed;
+          messagesByRoom[roomId] = parsed;
           chatStore.notify();
         }
       } catch {
@@ -159,41 +108,139 @@ function nowTime(): string {
   return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-function pushMessage(message: Omit<ChatMessage, "id" | "time" | "reactions">) {
+type NewMessage = Omit<ChatMessage, "id" | "time" | "reactions"> & { id?: string };
+
+function pushMessage(roomId: string, message: NewMessage) {
   const newMessage: ChatMessage = {
     ...message,
-    id: "msg-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7),
+    // Use the caller-provided id when present so the local copy matches the
+    // entry the hub relays — dedupe and cross-account reactions depend on it.
+    id: message.id || "msg-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7),
     time: nowTime(),
     reactions: {},
+    userAvatar: message.userAvatar || initialsAvatar(message.userName),
   };
-  messagesState = [...(messagesState ?? loadMessages()), newMessage];
-  saveMessages(messagesState);
+  const current = messagesByRoom[roomId] ?? loadMessages(roomId);
+  messagesByRoom[roomId] = [...current, newMessage];
+  saveMessages(roomId, messagesByRoom[roomId]);
   chatStore.notify();
   return newMessage;
 }
 
-/** Have a random teammate reply to a real user message after a short delay. */
-function scheduleBotReply() {
-  const teammate = TEAMMATES[Math.floor(Math.random() * TEAMMATES.length)];
-  const reply = teammate.replies[Math.floor(Math.random() * teammate.replies.length)];
-  const delay = 1200 + Math.random() * 2000;
-  setTimeout(() => {
-    pushMessage({
-      content: reply,
-      userId: "bot-" + teammate.name,
-      userName: teammate.name,
-      userAvatar: teammate.avatar,
-    });
-  }, delay);
-}
-
 export const chatStore = {
-  getMessages: () => {
-    if (!messagesState) messagesState = loadMessages();
-    return messagesState;
+  /* ---------------- rooms ---------------- */
+
+  getRooms: () => roomsState,
+
+  setRooms: (rooms: RoomInfo[]) => {
+    roomsState = rooms;
+    // Fall back to a room that actually exists (e.g. after a server restart).
+    if (rooms.length > 0 && !rooms.some((r) => r.id === currentRoomId)) {
+      currentRoomId = rooms[0].id;
+    }
+    chatStore.notify();
   },
+
+  getCurrentRoom: () => currentRoomId,
+
+  setCurrentRoom: (roomId: string) => {
+    if (currentRoomId === roomId) return;
+    currentRoomId = roomId;
+    try {
+      if (typeof window !== "undefined") localStorage.setItem(CURRENT_ROOM_KEY, roomId);
+    } catch {
+      // ignore unavailable storage
+    }
+    chatStore.notify();
+  },
+
+  /* ---------------- messages (per room) ---------------- */
+
+  getMessages: (roomId?: string) => {
+    const rid = roomId || currentRoomId;
+    if (messagesByRoom[rid] === undefined) messagesByRoom[rid] = loadMessages(rid);
+    return messagesByRoom[rid] ?? [];
+  },
+
+  /** Replace a room's messages with the server-authoritative history (on join). */
+  setMessages: (roomId: string, messages: ChatMessage[]) => {
+    messagesByRoom[roomId] = messages;
+    saveMessages(roomId, messages);
+    chatStore.notify();
+  },
+
+  sendMessage: (message: NewMessage, roomId?: string) => {
+    pushMessage(roomId || currentRoomId, message);
+  },
+
+  /**
+   * Add a message that arrived from another machine/tab. Idempotent: messages
+   * with an id already present are ignored (echoes, storage events, races).
+   */
+  addIncomingMessage: (message: ChatMessage, roomId?: string) => {
+    const rid = roomId || currentRoomId;
+    const current = messagesByRoom[rid] ?? loadMessages(rid);
+    if (current.some((m) => m.id === message.id)) return;
+    messagesByRoom[rid] = [
+      ...current,
+      {
+        ...message,
+        id: message.id,
+        time: message.time,
+        reactions: message.reactions ?? {},
+        userAvatar: message.userAvatar || initialsAvatar(message.userName),
+      },
+    ];
+    saveMessages(rid, messagesByRoom[rid]);
+    chatStore.notify();
+  },
+
+  /** Increment a reaction on a message that already exists locally. */
+  addReactionIncoming: (messageId: string, emoji: string, roomId?: string) => {
+    const rid = roomId || currentRoomId;
+    let touched = false;
+    messagesByRoom[rid] = (messagesByRoom[rid] ?? loadMessages(rid)).map((m) => {
+      if (m.id === messageId) {
+        touched = true;
+        const reactions = { ...m.reactions };
+        reactions[emoji] = (reactions[emoji] || 0) + 1;
+        return { ...m, reactions };
+      }
+      return m;
+    });
+    if (!touched) return;
+    saveMessages(rid, messagesByRoom[rid]);
+    chatStore.notify();
+  },
+
+  /** Wipe a room's local message history (used from Settings). */
+  clearMessages: (roomId?: string) => {
+    const rid = roomId || currentRoomId;
+    messagesByRoom[rid] = [];
+    saveMessages(rid, []);
+    chatStore.notify();
+  },
+
+  addReaction: (messageId: string, emoji: string, roomId?: string) => {
+    const rid = roomId || currentRoomId;
+    messagesByRoom[rid] = (messagesByRoom[rid] ?? loadMessages(rid)).map((m) => {
+      if (m.id === messageId) {
+        const reactions = { ...m.reactions };
+        reactions[emoji] = (reactions[emoji] || 0) + 1;
+        return { ...m, reactions };
+      }
+      return m;
+    });
+    saveMessages(rid, messagesByRoom[rid]);
+    chatStore.notify();
+  },
+
+  /* ---------------- voice + presence (unchanged) ---------------- */
+
   getVoiceMembers: () => voiceMembersState,
   isInVoice: () => isUserInVoice,
+  getPresenceCount: () => presenceCount,
+  getPresenceUsers: () => presenceUsersState,
 
   subscribe: (listener: () => void) => {
     LISTENERS.add(listener);
@@ -206,49 +253,17 @@ export const chatStore = {
     LISTENERS.forEach((l) => l());
   },
 
-  sendMessage: (message: Omit<ChatMessage, "id" | "time" | "reactions">) => {
-    pushMessage(message);
-    // Real teammates reply back so the room feels live.
-    scheduleBotReply();
-  },
-
-  /**
-   * Add a message that arrived from another machine/tab. Idempotent: messages
-   * with an id already present are ignored (echoes, storage events, races).
-   */
-  addIncomingMessage: (message: ChatMessage) => {
-    const current = messagesState ?? loadMessages();
-    if (current.some((m) => m.id === message.id)) return;
-    messagesState = [
-      ...current,
-      {
-        ...message,
-        id: message.id,
-        time: message.time,
-        reactions: message.reactions ?? {},
-        userAvatar:
-          message.userAvatar ||
-          "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
-      },
-    ];
-    saveMessages(messagesState);
+  /** Number of people currently connected to the hub (server-authoritative). */
+  setPresenceCount: (count: number) => {
+    if (presenceCount === count) return;
+    presenceCount = count;
     chatStore.notify();
   },
 
-  /** Increment a reaction on a message that already exists locally. */
-  addReactionIncoming: (messageId: string, emoji: string) => {
-    let touched = false;
-    messagesState = (messagesState ?? loadMessages()).map((m) => {
-      if (m.id === messageId) {
-        touched = true;
-        const reactions = { ...m.reactions };
-        reactions[emoji] = (reactions[emoji] || 0) + 1;
-        return { ...m, reactions };
-      }
-      return m;
-    });
-    if (!touched) return;
-    saveMessages(messagesState);
+  /** List of users currently connected to the hub (server-authoritative). */
+  setPresenceUsers: (users: PresenceUser[]) => {
+    presenceUsersState = users;
+    presenceCount = users.length;
     chatStore.notify();
   },
 
@@ -257,33 +272,12 @@ export const chatStore = {
     voiceMembersState = roster.map((m) => ({
       id: m.id,
       name: m.name,
-      avatar:
-        m.avatar ||
-        "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
+      avatar: m.avatar || initialsAvatar(m.name),
       isSpeaking: !!m.isSpeaking,
       isMuted: !!m.isMuted,
       role: m.role || "Participant",
+      conn: m.conn,
     }));
-    chatStore.notify();
-  },
-
-  /** Wipe local message history (used from Settings). */
-  clearMessages: () => {
-    messagesState = [];
-    saveMessages([]);
-    chatStore.notify();
-  },
-
-  addReaction: (messageId: string, emoji: string) => {
-    messagesState = (messagesState ?? loadMessages()).map((m) => {
-      if (m.id === messageId) {
-        const reactions = { ...m.reactions };
-        reactions[emoji] = (reactions[emoji] || 0) + 1;
-        return { ...m, reactions };
-      }
-      return m;
-    });
-    saveMessages(messagesState);
     chatStore.notify();
   },
 
@@ -295,7 +289,7 @@ export const chatStore = {
         {
           id: user.id,
           name: user.name,
-          avatar: user.avatar || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
+          avatar: user.avatar || initialsAvatar(user.name),
           isSpeaking: false,
           isMuted: !!user.muted,
           role: "Participant",

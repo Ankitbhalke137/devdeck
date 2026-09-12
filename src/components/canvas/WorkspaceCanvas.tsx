@@ -1,15 +1,20 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useSyncExternalStore } from "react";
 import ReactGridLayout from "react-grid-layout/legacy";
 import type { LayoutItem } from "react-grid-layout/legacy";
-import { useContainerWidth } from "react-grid-layout";
 import { AIAssistantWidget } from "@/components/widgets/AIAssistantWidget";
 import { TaskboardWidget } from "@/components/widgets/TaskboardWidget";
 import { ResourceHubWidget } from "@/components/widgets/ResourceHubWidget";
-import { DevToolsWidget } from "@/components/widgets/DevToolsWidget";
 import { ChatWidget } from "@/components/widgets/ChatWidget";
 import { FocusStationWidget } from "@/components/widgets/FocusStationWidget";
+import { MusicPlayerWidget } from "@/components/widgets/MusicPlayerWidget";
+import { NotesWidget } from "@/components/widgets/NotesWidget";
+import { StatsWidget } from "@/components/widgets/StatsWidget";
+import { HabitWidget } from "@/components/widgets/HabitWidget";
+import { CalendarWidget } from "@/components/widgets/CalendarWidget";
+import { SharedNotesWidget } from "@/components/widgets/SharedNotesWidget";
+import { TelemetryWidget } from "@/components/widgets/TelemetryWidget";
 import { workspaceStore, ALL_WIDGET_TYPES, WidgetType, WidgetLayoutItem } from "@/lib/workspaceStore";
 
 interface WorkspaceCanvasProps {
@@ -22,14 +27,26 @@ function widgetFor(type: WidgetType, onOpenVoiceModal?: () => void) {
       return <AIAssistantWidget />;
     case "tasks":
       return <TaskboardWidget />;
+    case "telemetry":
+      return <TelemetryWidget />;
     case "resources":
       return <ResourceHubWidget />;
-    case "dev-tools":
-      return <DevToolsWidget />;
     case "chat":
       return <ChatWidget onOpenVoiceModal={onOpenVoiceModal} />;
     case "focus":
       return <FocusStationWidget />;
+    case "music":
+      return <MusicPlayerWidget />;
+    case "notes":
+      return <NotesWidget />;
+    case "stats":
+      return <StatsWidget />;
+    case "habits":
+      return <HabitWidget />;
+    case "calendar":
+      return <CalendarWidget />;
+    case "sharedNotes":
+      return <SharedNotesWidget />;
     default:
       return null;
   }
@@ -41,12 +58,33 @@ export function WorkspaceCanvas({ onOpenVoiceModal }: WorkspaceCanvasProps) {
   const focusRequest = workspaceStore((s) => s.focusRequest);
   const addWidget = workspaceStore((s) => s.addWidget);
   const setLayout = workspaceStore((s) => s.setLayout);
-  const { width, containerRef, mounted } = useContainerWidth({ initialWidth: 1280 });
+
+  // Hydration-safe client check using useSyncExternalStore: the grid only
+  // renders after mount, so measuring the container can't cause a mismatch.
+  const isClient = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false
+  );
+
+  // Container width measured via ResizeObserver so the grid reflows when the
+  // window or sidebar resizes (capped at max-w-[1920px] by the wrapper div).
+  // The ref callback keeps the observer attached across the placeholder→grid
+  // render switch and whenever the layout re-renders.
+  const [canvasEl, setCanvasEl] = useState<HTMLDivElement | null>(null);
+  const [gridWidth, setGridWidth] = useState(0);
+
+  useEffect(() => {
+    if (!canvasEl) return;
+    const update = () => setGridWidth(canvasEl.clientWidth);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(canvasEl);
+    return () => observer.disconnect();
+  }, [canvasEl]);
 
   const [flashType, setFlashType] = useState<WidgetType | null>(null);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Navigate from the sidebar / command palette: reveal if hidden, scroll to it, flash it.
   useEffect(() => {
     const type = focusRequest.type;
     if (!type || focusRequest.nonce === 0) return;
@@ -95,20 +133,20 @@ export function WorkspaceCanvas({ onOpenVoiceModal }: WorkspaceCanvasProps) {
     [setLayout]
   );
 
-  if (!mounted) {
+  if (!isClient || gridWidth <= 0) {
     // Avoid layout flashes while the container width is measured.
     return (
-      <section className="p-4 bg-[#09090b] min-h-[calc(100vh-3.5rem)]">
-        <div className="max-w-[1920px] mx-auto h-[70vh] rounded-lg border border-[#18181b] animate-pulse" />
+      <section className="p-4 bg-background min-h-[calc(100vh-3.5rem)] transition-colors duration-150">
+        <div ref={setCanvasEl} className="max-w-[1920px] mx-auto h-[70vh] rounded-lg border border-custom animate-pulse" />
       </section>
     );
   }
 
   return (
-    <section className="p-4 bg-[#09090b] min-h-[calc(100vh-3.5rem)]">
-      <div ref={containerRef} className="max-w-[1920px] mx-auto">
+    <section className="p-4 bg-background min-h-[calc(100vh-3.5rem)] transition-colors duration-150">
+      <div ref={setCanvasEl} className="max-w-[1920px] mx-auto">
         <ReactGridLayout
-          width={width}
+          width={gridWidth}
           layout={layout.filter((l) => active.includes(l.i as WidgetType))}
           cols={12}
           rowHeight={44}

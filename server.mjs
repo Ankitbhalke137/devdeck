@@ -7,7 +7,14 @@ import { createServer } from "node:http";
 import { existsSync } from "node:fs";
 import next from "next";
 import { Server } from "socket.io";
-import { initPersistence, appendMessage, incrementReaction } from "./persistence.mjs";
+import {
+  initPersistence,
+  incrementReaction,
+  loadRooms,
+  persistRoom,
+  appendRoomMessage,
+  saveRoomMusic,
+} from "./persistence.mjs";
 
 // Load local env files before anything else so persistence can see DATABASE_URL.
 // (Next.js loads these itself during app.prepare(), but our hub initializes first.)
@@ -30,33 +37,28 @@ const handle = app.getRequestHandler();
 
 const MESSAGE_LIMIT = 200;
 
-// In-memory hub state (one process). The message log is additionally written
-// through to disk (or Neon Postgres when DATABASE_URL is set) so chat history
-// survives server restarts. Clients merge the log on connect.
-const messageLog = await initPersistence();
+// In-memory hub state (one process). Chat history is written through to disk
+// (or Neon Postgres when DATABASE_URL is set) so it survives server restarts.
+//
+// Rooms: each room has its own chat log + shared music state. "general" keeps
+// the legacy single-log persistence path; extra rooms persist to rooms.json.
+const generalLog = await initPersistence();
+const rooms = new Map(); // id -> { id, name, createdBy, createdAt, messages, music }
+rooms.set("general", {
+  id: "general",
+  name: "General",
+  createdBy: null,
+  createdAt: Date.now(),
+  messages: generalLog,
+  music: null,
+});
+for (const [id, room] of (await loadRooms()).entries()) {
+  rooms.set(id, room);
+}
 const presence = new Map(); // userId -> { id, name, avatar }
 const voiceRoster = new Map(); // userId -> VoiceParticipant
-
-// Seed the huddle stage with the demo teammates (they have no sockets, so
-// they never disconnect and always show in the roster).
-voiceRoster.set("voice-1", {
-  id: "voice-1",
-  name: "Sarah Infrastructure",
-  avatar:
-    "https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&auto=format&fit=crop&q=80",
-  isSpeaking: false,
-  isMuted: false,
-  role: "Host",
-});
-voiceRoster.set("voice-2", {
-  id: "voice-2",
-  name: "Alex Developer",
-  avatar:
-    "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
-  isSpeaking: false,
-  isMuted: false,
-  role: "Participant",
-});
+const socketsByUser = new Map(); // userId -> socket (WebRTC signaling relay)
+const sharedNotes = new Map(); // id -> { id, title, content, updatedAt, updatedBy }
 
 function toPresenceList() {
   return [...presence.values()];
@@ -64,6 +66,14 @@ function toPresenceList() {
 
 function toVoiceList() {
   return [...voiceRoster.values()];
+}
+
+function roomList() {
+  return [...rooms.values()].map((r) => ({
+    id: r.id,
+    name: r.name,
+    members: io.sockets.adapter.rooms.get(r.id)?.size || 0,
+  }));
 }
 
 try {
@@ -87,7 +97,8 @@ io.on("connection", (socket) => {
   let userId = null;
 
   // Send current hub state to the freshly connected client.
-  socket.emit("chat:history", { messages: messageLog });
+  socket.emit("chat:rooms", roomList());
+  socket.emit("chat:history", { messages: generalLog }); // legacy general-room history
   socket.emit("presence", toPresenceList());
   socket.emit("voice:state", toVoiceList());
 
@@ -98,37 +109,95 @@ io.on("connection", (socket) => {
       name: user?.name || "Guest",
       avatar: user?.avatar || null,
     });
+    socketsByUser.set(userId, socket);
     socket.broadcast.emit("presence", toPresenceList());
   });
 
-  // New chat message → append to hub log and relay to every other client.
-  socket.on("chat:message", async (msg) => {
-    if (!msg?.id || typeof msg.content !== "string" || !msg.content.trim()) return;
-    const entry = await appendMessage(msg);
-    messageLog.push(entry);
-    if (messageLog.length > MESSAGE_LIMIT) messageLog.shift();
-    socket.broadcast.emit("chat:message", entry);
+  // ---- Chat rooms (each room: own log + shared music state) ----
+
+  // Join a room: native socket.io rooms scope message/music fan-out to members.
+  socket.on("chat:join-room", (payload) => {
+    const roomId = payload?.roomId;
+    if (!roomId || !rooms.has(roomId)) return;
+    if (socket.data.roomId) socket.leave(socket.data.roomId);
+    socket.data.roomId = roomId;
+    socket.join(roomId);
+    const room = rooms.get(roomId);
+    socket.emit("chat:room-history", { roomId, messages: room.messages.slice(-MESSAGE_LIMIT) });
+    socket.emit("chat:music-state", { roomId, music: room.music });
   });
 
-  // Reaction intents are relayed to other clients and recorded in the log so
-  // counts survive restarts (each client still keeps its own live counters).
+  // Create a room: the creator is switched into it, everyone gets the new list.
+  socket.on("chat:create-room", (payload) => {
+    const name = String(payload?.name || "").trim().slice(0, 40);
+    if (!name) return;
+    const id = "room-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const room = { id, name, createdBy: userId || null, createdAt: Date.now(), messages: [], music: null };
+    rooms.set(id, room);
+    persistRoom(room);
+    if (socket.data.roomId) socket.leave(socket.data.roomId);
+    socket.data.roomId = id;
+    socket.join(id);
+    socket.emit("chat:room-created", { roomId: id, name: room.name });
+    socket.emit("chat:room-history", { roomId: id, messages: [] });
+    socket.emit("chat:music-state", { roomId: id, music: null });
+    io.emit("chat:rooms", roomList());
+  });
+
+  // New chat message → append to the room's log and relay to everyone in it
+  // (sender included; clients dedupe by id).
+  socket.on("chat:message", async (msg) => {
+    if (!msg?.id || typeof msg.content !== "string" || !msg.content.trim()) return;
+    const roomId = msg.roomId || socket.data.roomId || "general";
+    const room = rooms.get(roomId);
+    if (!room) return;
+    const entry = await appendRoomMessage(roomId, msg);
+    room.messages.push(entry);
+    if (room.messages.length > MESSAGE_LIMIT) room.messages.shift();
+    io.to(roomId).emit("chat:message", entry);
+  });
+
+  // Reaction intents are relayed within the room and recorded so counts
+  // survive restarts (each client still keeps its own live counters).
   socket.on("chat:reaction", (payload) => {
-    if (!payload?.messageId || !payload?.emoji) return;
-    const stored = messageLog.find((m) => m.id === payload.messageId);
+    const roomId = payload?.roomId || socket.data.roomId || "general";
+    const { messageId, emoji } = payload || {};
+    if (!messageId || !emoji) return;
+    const room = rooms.get(roomId);
+    if (!room) return;
+    const stored = room.messages.find((m) => m.id === messageId);
     if (stored) {
       stored.reactions = { ...(stored.reactions || {}) };
-      stored.reactions[payload.emoji] = (stored.reactions[payload.emoji] || 0) + 1;
+      stored.reactions[emoji] = (stored.reactions[emoji] || 0) + 1;
     }
-    incrementReaction(payload.messageId, payload.emoji);
-    socket.broadcast.emit("chat:reaction", {
-      messageId: payload.messageId,
-      emoji: payload.emoji,
-    });
+    incrementReaction(messageId, emoji);
+    io.to(roomId).emit("chat:reaction", { roomId, messageId, emoji });
+  });
+
+  // Shared music: whoever changes the track or playback updates the whole room.
+  socket.on("music:update", (payload) => {
+    const roomId = payload?.roomId || socket.data.roomId || "general";
+    const room = rooms.get(roomId);
+    if (!room) return;
+    const m = payload?.music;
+    room.music = m
+      ? {
+          videoId: String(m.videoId || "").slice(0, 200),
+          title: String(m.title || "Unknown").slice(0, 120),
+          artist: String(m.artist || "").slice(0, 120),
+          isPlaying: !!m.isPlaying,
+        }
+      : null;
+    saveRoomMusic(roomId, room.music);
+    io.to(roomId).emit("chat:music-state", { roomId, music: room.music });
   });
 
   // ---- Voice huddle roster sync (join / leave / mute / role updates) ----
   socket.on("voice:join", (participant) => {
     if (!participant?.id) return;
+    userId = participant.id;
+    socket.data.voiceUserId = participant.id;
+    socketsByUser.set(userId, socket);
     const p = {
       id: participant.id,
       name: participant.name || "Guest",
@@ -136,9 +205,12 @@ io.on("connection", (socket) => {
       isMuted: !!participant.isMuted,
       isSpeaking: false,
       role: participant.role || "Participant",
+      conn: socket.id, // unique per connection — used to break offer/answer ties
     };
     voiceRoster.set(p.id, p);
-    socket.broadcast.emit("voice:state", toVoiceList());
+    // Everyone (including the joiner) gets the full roster so each client can
+    // reconcile its WebRTC peer connections.
+    io.emit("voice:state", toVoiceList());
   });
 
   socket.on("voice:update", (participant) => {
@@ -154,18 +226,83 @@ io.on("connection", (socket) => {
   });
 
   socket.on("voice:leave", (id) => {
-    if (!id) return;
-    if (voiceRoster.delete(id)) {
+    const participantId = id || socket.data.voiceUserId || userId;
+    if (!participantId) return;
+    socket.data.voiceUserId = null;
+    if (voiceRoster.delete(participantId)) {
+      socketsByUser.delete(participantId);
       socket.broadcast.emit("voice:state", toVoiceList());
     }
   });
 
-  socket.on("disconnect", () => {
-    if (userId && presence.delete(userId)) {
-      socket.broadcast.emit("presence", toPresenceList());
+  // WebRTC signaling relay: routes offers/answers/ICE candidates between
+  // huddle peers so real peer-to-peer audio flows with no third-party service.
+  socket.on("voice:signal", (payload) => {
+    const to = payload?.to;
+    const signal = payload?.signal;
+    const senderId = payload?.from || socket.data.voiceUserId || userId;
+    if (!to || !signal || to === senderId) return;
+    let target = socketsByUser.get(to);
+    // Fallback: look up peer in voice roster by conn/socket ID if not found by user ID
+    if (!target) {
+      const peer = voiceRoster.get(to);
+      if (peer?.conn) {
+        target = io.sockets.sockets.get(peer.conn);
+      }
     }
-    if (userId && voiceRoster.delete(userId)) {
+    if (target?.connected) {
+      target.emit("voice:signal", { from: senderId, signal });
+    }
+  });
+
+  // ---- Shared notes (real-time collaborative editing) ----
+  socket.on("notes:list", () => {
+    socket.emit("notes:list", [...sharedNotes.values()]);
+  });
+
+  socket.on("notes:create", (payload) => {
+    const note = {
+      id: "note-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      title: String(payload?.title || "Untitled").slice(0, 200),
+      content: "",
+      updatedAt: Date.now(),
+      updatedBy: userId || "Anonymous",
+    };
+    sharedNotes.set(note.id, note);
+    io.emit("notes:update", note);
+  });
+
+  socket.on("notes:update", (payload) => {
+    if (!payload?.id) return;
+    const existing = sharedNotes.get(payload.id);
+    const note = {
+      id: payload.id,
+      title: String(payload.title ?? existing?.title ?? "Untitled").slice(0, 200),
+      content: String(payload.content ?? existing?.content ?? ""),
+      updatedAt: Date.now(),
+      updatedBy: userId || "Anonymous",
+    };
+    sharedNotes.set(note.id, note);
+    socket.broadcast.emit("notes:update", note);
+  });
+
+  socket.on("notes:delete", (payload) => {
+    if (!payload?.id) return;
+    sharedNotes.delete(payload.id);
+    socket.broadcast.emit("notes:delete", { id: payload.id });
+  });
+
+  socket.on("disconnect", () => {
+    const voiceId = socket.data.voiceUserId || userId;
+    if (voiceId) {
+      voiceRoster.delete(voiceId);
+      socketsByUser.delete(voiceId);
       socket.broadcast.emit("voice:state", toVoiceList());
+    }
+    if (userId) {
+      presence.delete(userId);
+      socketsByUser.delete(userId);
+      socket.broadcast.emit("presence", toPresenceList());
     }
   });
 });
