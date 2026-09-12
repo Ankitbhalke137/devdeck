@@ -15,6 +15,7 @@ import { HabitWidget } from "@/components/widgets/HabitWidget";
 import { CalendarWidget } from "@/components/widgets/CalendarWidget";
 import { SharedNotesWidget } from "@/components/widgets/SharedNotesWidget";
 import { TelemetryWidget } from "@/components/widgets/TelemetryWidget";
+import { VideoPlayerWidget } from "@/components/widgets/VideoPlayerWidget";
 import { workspaceStore, ALL_WIDGET_TYPES, WidgetType, WidgetLayoutItem } from "@/lib/workspaceStore";
 
 interface WorkspaceCanvasProps {
@@ -37,6 +38,8 @@ function widgetFor(type: WidgetType, onOpenVoiceModal?: () => void) {
       return <FocusStationWidget />;
     case "music":
       return <MusicPlayerWidget />;
+    case "video":
+      return <VideoPlayerWidget />;
     case "notes":
       return <NotesWidget />;
     case "stats":

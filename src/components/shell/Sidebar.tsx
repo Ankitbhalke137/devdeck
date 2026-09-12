@@ -21,6 +21,7 @@ import {
   Calendar,
   GripVertical,
   Activity,
+  Tv,
 } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import {
@@ -46,7 +47,7 @@ import {
 } from "@/lib/workspaceStore";
 
 const DEFAULT_NAV_ORDER: (WidgetType | "dashboard")[] = [
-  "dashboard", "ai", "tasks", "telemetry", "resources", "chat", "music",
+  "dashboard", "ai", "tasks", "telemetry", "resources", "chat", "music", "video",
   "notes", "sharedNotes", "stats", "habits", "calendar", "focus",
 ];
 
@@ -58,6 +59,7 @@ const NAV_ICONS: Record<WidgetType | "dashboard", typeof LayoutGrid> = {
   resources: Folder,
   chat: MessageCircle,
   music: Music,
+  video: Tv,
   focus: Timer,
   notes: StickyNote,
   stats: BarChart3,
@@ -73,6 +75,7 @@ const widgetIcon: Record<WidgetType, typeof LayoutGrid> = {
   resources: Folder,
   chat: MessageCircle,
   music: Music,
+  video: Tv,
   focus: Timer,
   notes: StickyNote,
   stats: BarChart3,

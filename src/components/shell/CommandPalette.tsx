@@ -21,6 +21,7 @@ import {
   Target,
   Calendar,
   Activity,
+  Tv,
 } from "lucide-react";
 import { useState, useEffect, useRef, useMemo } from "react";
 import { workspaceStore, ALL_WIDGET_TYPES, WIDGET_META, WidgetType } from "@/lib/workspaceStore";
@@ -49,6 +50,7 @@ const WIDGET_ICONS: Record<WidgetType, typeof Search> = {
   resources: Folder,
   chat: MessageCircle,
   music: Music,
+  video: Tv,
   focus: Timer,
   notes: StickyNote,
   stats: BarChart3,

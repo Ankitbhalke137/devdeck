@@ -2,9 +2,9 @@
 
 import { create } from "zustand";
 
-export type WidgetType = "ai" | "tasks" | "resources" | "chat" | "focus" | "music" | "notes" | "stats" | "habits" | "calendar" | "sharedNotes" | "telemetry";
+export type WidgetType = "ai" | "tasks" | "resources" | "chat" | "focus" | "music" | "video" | "notes" | "stats" | "habits" | "calendar" | "sharedNotes" | "telemetry";
 
-export const ALL_WIDGET_TYPES: WidgetType[] = ["ai", "tasks", "telemetry", "resources", "chat", "music", "notes", "stats", "habits", "calendar", "sharedNotes", "focus"];
+export const ALL_WIDGET_TYPES: WidgetType[] = ["ai", "tasks", "telemetry", "resources", "chat", "music", "video", "notes", "stats", "habits", "calendar", "sharedNotes", "focus"];
 
 export const WIDGET_META: Record<WidgetType, { label: string; description: string }> = {
   ai: { label: "AI Assistant", description: "Multi-model AI chat" },
@@ -14,6 +14,7 @@ export const WIDGET_META: Record<WidgetType, { label: string; description: strin
   chat: { label: "Team Chat", description: "Live team messaging" },
   focus: { label: "Focus Timer", description: "Pomodoro timer" },
   music: { label: "Music Player", description: "YouTube music player" },
+  video: { label: "Video Player", description: "YouTube & stream player" },
   notes: { label: "Quick Notes", description: "Markdown scratchpad" },
   stats: { label: "Focus Stats", description: "Pomodoro analytics" },
   habits: { label: "Habit Tracker", description: "Daily habit tracking" },
@@ -39,12 +40,13 @@ export const DEFAULT_LAYOUT: WidgetLayoutItem[] = [
   { i: "resources", x: 0, y: 16, w: 4, h: 8, minW: 3, minH: 5 },
   { i: "chat", x: 4, y: 16, w: 4, h: 8, minW: 3, minH: 5 },
   { i: "music", x: 8, y: 16, w: 4, h: 8, minW: 3, minH: 5 },
-  { i: "notes", x: 0, y: 24, w: 4, h: 7, minW: 3, minH: 4 },
-  { i: "stats", x: 4, y: 24, w: 4, h: 7, minW: 3, minH: 4 },
-  { i: "habits", x: 8, y: 24, w: 4, h: 7, minW: 3, minH: 4 },
-  { i: "calendar", x: 0, y: 31, w: 6, h: 8, minW: 4, minH: 5 },
-  { i: "sharedNotes", x: 6, y: 31, w: 6, h: 8, minW: 4, minH: 5 },
-  { i: "focus", x: 0, y: 39, w: 12, h: 6, minW: 6, minH: 4 },
+  { i: "video", x: 0, y: 24, w: 6, h: 8, minW: 4, minH: 6 },
+  { i: "notes", x: 6, y: 24, w: 6, h: 8, minW: 3, minH: 4 },
+  { i: "stats", x: 0, y: 32, w: 4, h: 7, minW: 3, minH: 4 },
+  { i: "habits", x: 4, y: 32, w: 4, h: 7, minW: 3, minH: 4 },
+  { i: "calendar", x: 8, y: 32, w: 4, h: 7, minW: 4, minH: 5 },
+  { i: "sharedNotes", x: 0, y: 39, w: 6, h: 8, minW: 4, minH: 5 },
+  { i: "focus", x: 6, y: 39, w: 6, h: 8, minW: 6, minH: 4 },
 ];
 
 export const DEFAULT_ACTIVE: WidgetType[] = [...ALL_WIDGET_TYPES];
